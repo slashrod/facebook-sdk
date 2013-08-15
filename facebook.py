@@ -191,7 +191,7 @@ class GraphAPI(object):
         # Raise an error if we got one, but don't not if Facebook just
         # gave us a Bool value
         if (response and isinstance(response, dict) and response.get("error")):
-            raise GraphAPIError(response)
+            raise raise_error(response), response
 
         conn.close()
 
@@ -231,7 +231,7 @@ class GraphAPI(object):
             # gave us a Bool value
             if (response and isinstance(response, dict) and
                     response.get("error")):
-                raise GraphAPIError(response)
+                raise raise_error(response), response
         except ValueError:
             response = data
 
@@ -341,7 +341,7 @@ class GraphAPI(object):
                     "url": file.url,
                 }
             else:
-                raise GraphAPIError('Maintype was not text or image')
+                raise raise_error('Maintype was not text or image')
         finally:
             file.close()
         if response and isinstance(response, dict) and response.get("error"):
@@ -398,7 +398,7 @@ class GraphAPI(object):
             response = _parse_json(content)
             #Return a list if success, return a dictionary if failed
             if type(response) is dict and "error_code" in response:
-                raise GraphAPIError(response)
+                raise raise_error(response), response
         except Exception, e:
             raise e
         finally:
@@ -430,7 +430,7 @@ class GraphAPI(object):
             return result
         else:
             response = json.loads(response)
-            raise GraphAPIError(response)
+            raise raise_error(response), response
 
 
 class GraphAPIError(Exception):
@@ -458,6 +458,106 @@ class GraphAPIError(Exception):
                     self.message = result
 
         Exception.__init__(self, self.message)
+
+class OAuthError(GraphAPIError):
+    """
+        OAuth Error. Reauthenticate the session
+    """
+    pass
+
+class ServerError(GraphAPIError):
+    """
+        Server side error, hold on and retry later
+    """
+    pass
+
+class UserError(GraphAPIError):
+    """
+        User has not either granted a permission or it has removed it
+    """
+    pass
+
+class AppOAuthError(OAuthError):
+    """
+        User removed the app fom it settings
+
+    """
+    pass
+
+class UserOAuthError(OAuthError):
+    """
+        User checkpointed. He needs to log onto www.facebook.com or
+        m.facebook.com
+    """
+    pass
+
+class PasswordOAuthError(OAuthError):
+    """
+        Password Changed on Facebook
+
+    """
+    pass
+
+class ExpiredOAuthError(OAuthError):
+    """
+        
+        Token expired and a new one needs to be requested
+
+    """
+    pass
+
+class UnconfirmedOAuthError(OAuthError):
+    """
+    
+        User needs to log onto www.facebook.com, m.facebook.com
+    
+    """
+    pass
+
+class InvalidOAuthError(OAuthError):
+    """
+        Invalid Token and a neww needs to be requested
+    
+    """
+    pass
+
+
+def raise_error(response):
+    
+    code = response['error']['code']
+    error_subcode = None
+
+    if code in (190, 102):
+        error_subcode = response['error']['error_subcode']
+
+    exceptions = { 
+            190: 
+            {
+                458 : AppOAuthError,
+                459 : UserOAuthError,
+                460 : PasswordOAuthError,
+                463 : ExpiredOAuthError,
+                464 : UnconfirmedOAuthError,
+                467 : InvalidOAuthError
+                },
+            1 : ServerError,
+            2 : ServerError,
+            4 : ServerError,
+            17 : ServerError,
+            10 : UserError
+            }
+
+    exceptions[102] = exceptions[190]
+
+    if error_subcode:
+        return exceptions[code][error_subcode]
+
+    return exceptions[code]
+
+
+
+
+
 
 
 def get_user_from_cookie(cookies, app_id, app_secret):
@@ -568,7 +668,7 @@ def get_access_token_from_code(code, redirect_uri, app_id, app_secret):
         return result
     else:
         response = json.loads(response)
-        raise GraphAPIError(response)
+        raise raise_error(response), response
 
 
 def get_app_access_token(app_id, app_secret):
@@ -596,3 +696,92 @@ def get_app_access_token(app_id, app_secret):
         file.close()
 
     return result
+
+def get_long_lived_access_token(app_id, app_secret, short_lived_token):
+    """Get the access_token for the app.
+
+    This token can be used for insights and creating test users.
+    It uses a live, authorized token to generate a long lived one
+
+    app_id = retrieved from the developer page
+    app_secret = retrieved from the developer page
+    short_lived_token = retrieved after successfull login, should be valid
+
+    Returns the long_live  access_token.
+
+    """
+    # Get an app access token
+    args = {
+            'grant_type': 'fb_exchange_token',
+            'client_id': app_id,
+            'client_secret': app_secret,
+            'fb_exchange_token': short_lived_token
+            }
+
+    f = urllib2.urlopen("https://graph.facebook.com/oauth/access_token?" +
+                           urllib.urlencode(args))
+
+
+    try:
+        result = f.read().split("=")[1].split("&")[0]
+    finally:
+        f.close()
+
+    return result
+
+def debug_access_token(input_token, access_token):
+    """Get debug information for an access_token
+
+    input_token: the access token you want to get information about
+    access_token: your [app access token][10] or a valid user access token
+                from a developer of the app. In fact this is
+                app_access_token returned by get_app_access_token(app_id,
+                app_secret)
+    
+    returns: 
+            {
+                "data": {
+                    "app_id": 138483919580948, 
+                    "application": "Social Cafe", 
+                    "expires_at": 1352419328, 
+                    "is_valid": true, 
+                    "issued_at": 1347235328, 
+                    "metadata": {
+                        "sso": "iphone-safari"
+                    }, 
+                    "scopes": [
+                        "email", 
+                        "publish_actions"
+                    ], 
+                    "user_id": 1207059
+                }
+            }
+    """
+    args = {
+            'input_token': input_token,
+            'access_token': access_token,
+            }
+
+    response = urllib.urlopen("https://graph.facebook.com/debug_token" +
+                              "?" + urllib.urlencode(args)).read()
+
+    response = json.loads(response)
+    return response
+
+
+def valid_access_token(input_token, access_token):
+    """
+        Return False if access token not valid
+        Return (True, expiration_time in unix time, expiration time human
+        readable) if still valid
+    """
+
+    response = debug_access_token(input_token, access_token)
+    response = response['data']
+
+
+    if response["is_valid"]:
+        import time
+        return True, response["expires_at"], int(time.ctime(int(response["expires_at"])))
+    else:
+        return False

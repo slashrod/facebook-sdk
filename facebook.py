@@ -554,12 +554,6 @@ def raise_error(response):
 
     return exceptions[code]
 
-
-
-
-
-
-
 def get_user_from_cookie(cookies, app_id, app_secret):
     """Parses the cookie set by the official Facebook JavaScript SDK.
 
